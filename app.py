@@ -114,9 +114,9 @@ for period, period_df in filtered_df.groupby("PERIOD"):
 
 # The benchmark: a single gray, dashed line across both periods, showing
 # the average "typical" recovery trend across every player in the dataset, regardless of
-# who's currently selected. Since GAMES_FROM_RETURN already sits Before
-# (negative) then After (positive) in order, we don't need to split this
-# into two traces — one continuous line reads just as clearly and is one
+# who's currently selected. compute_benchmark_curve() sorts its rows by
+# GAMES_FROM_RETURN (Before is negative, After is positive), so we don't
+# need to split this into two traces — one continuous line reads just as clearly and is one
 # less legend entry to parse.
 fig.add_trace(go.Scatter(
     x=benchmark_df["GAMES_FROM_RETURN"],

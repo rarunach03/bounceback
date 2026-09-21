@@ -113,7 +113,14 @@ def compute_benchmark_curve(all_data_df, stat_column="PTS_ROLLING_AVG"):
     # kind of row-label (called an index) instead of regular columns.
     # .reset_index() turns them back into normal columns, which is the
     # shape plotly expects to plot from.
-    return benchmark_df
+    #
+    # groupby() also sorts its groups alphabetically by PERIOD, so "After"
+    # would come before "Before" — and since the app draws this as one
+    # continuous line, it would run through the After games, then jump
+    # backwards across the whole chart to start the Before games. Sorting
+    # by GAMES_FROM_RETURN puts every row in true timeline order (-75 ...
+    # -1, then 1 ... 72), so the line is drawn left to right in one pass.
+    return benchmark_df.sort_values("GAMES_FROM_RETURN").reset_index(drop=True)
 
 
 if __name__ == "__main__":
