@@ -1,30 +1,58 @@
 import plotly.graph_objects as go
 import streamlit as st
 
-from build_dataset import build_all_players_dataset, compute_benchmark_curve
+from build_dataset import compute_benchmark_curve, read_cached_dataset
 
-st.title("ReturnCurve")
+st.title("BounceBack")
 
 # Streamlit apps work differently than a normal script: every time you
 # interact with a widget (like the dropdown below), Streamlit reruns this
-# *entire file* from top to bottom. Without help, that would mean redoing
-# all 10 live nba_api calls from scratch on every single click, which is
-# slow and unnecessary since the underlying data hasn't actually changed.
-# @st.cache_data tells Streamlit: "run this function once, remember what
-# it returned, and just hand back that saved result on future reruns"
-# (it'll only actually re-run if the function's code or arguments change).
-@st.cache_data
-def load_data():
-    return build_all_players_dataset()
+# *entire file* from top to bottom. That used to mean live nba_api calls
+# on every cold start — and when stats.nba.com is slow or blocking us, the
+# app just hung on a blank page. So the app no longer talks to the network
+# at all: it only reads the saved all_players_cache.csv, which is a quick
+# local file read (no @st.cache_data needed). The slow fetching happens
+# separately, by running `python build_dataset.py`.
+all_data_df = read_cached_dataset()
 
+# If the data file hasn't been built yet, say so plainly instead of
+# crashing. st.stop() ends this run of the script right here, so none of
+# the code below (which needs the data) runs.
+if all_data_df is None:
+    st.error(
+        "No data yet. Build it once with `python build_dataset.py` "
+        "(this fetches from stats.nba.com), then refresh this page."
+    )
+    st.stop()
 
-all_data_df = load_data()
+# The app only covers players who returned from a significant injury
+# during the 2025-26 season, so there's no season dropdown — just a caption
+# saying so. Injury type and team act as filters that narrow down the
+# player dropdown below. Each gets an "All" choice up front so it can be
+# left unused, and the team list is built from only the rows that survived
+# the injury-type filter — that way you never see a team with no players
+# for the chosen injury.
+st.caption("Injury recoveries in the 2025-26 NBA season, by injury type and team")
+
+injury_types = sorted(all_data_df["INJURY_TYPE"].unique())
+selected_injury_type = st.selectbox("Injury type", ["All"] + injury_types)
+
+injury_df = all_data_df
+if selected_injury_type != "All":
+    injury_df = injury_df[injury_df["INJURY_TYPE"] == selected_injury_type]
+
+teams = sorted(injury_df["TEAM"].unique())
+selected_team = st.selectbox("Team", ["All"] + teams)
+
+team_df = injury_df
+if selected_team != "All":
+    team_df = team_df[team_df["TEAM"] == selected_team]
 
 # st.selectbox() renders an actual dropdown widget in the browser.
 # The second argument is the list of choices — here, every unique value
-# in the PLAYER column. Whatever the user picks gets returned and stored
-# in selected_player.
-player_list = all_data_df["PLAYER"].unique()
+# in the PLAYER column of whatever's left after the filters above. Whatever
+# the user picks gets returned and stored in selected_player.
+player_list = team_df["PLAYER"].unique()
 selected_player = st.selectbox("Choose a player", player_list)
 
 # A dictionary mapping a friendly label (what the user sees in the
@@ -56,6 +84,10 @@ benchmark_df = compute_benchmark_curve(all_data_df, stat_column=rolling_col)
 # is currently selected in the dropdown.
 filtered_df = all_data_df[all_data_df["PLAYER"] == selected_player]
 
+# Every row for one player carries the same injury type, so grabbing the
+# first row's value is enough — we use it in the chart title below.
+player_injury_type = filtered_df["INJURY_TYPE"].iloc[0]
+
 fig = go.Figure()
 
 # One fixed color per period, reused everywhere that period shows up, so
@@ -81,7 +113,7 @@ for period, period_df in filtered_df.groupby("PERIOD"):
     ))
 
 # The benchmark: a single gray, dashed line across both periods, showing
-# the average "typical" recovery trend across all 5 players, regardless of
+# the average "typical" recovery trend across every player in the dataset, regardless of
 # who's currently selected. Since GAMES_FROM_RETURN already sits Before
 # (negative) then After (positive) in order, we don't need to split this
 # into two traces — one continuous line reads just as clearly and is one
@@ -90,7 +122,7 @@ fig.add_trace(go.Scatter(
     x=benchmark_df["GAMES_FROM_RETURN"],
     y=benchmark_df[rolling_col],
     mode="lines",
-    name="All-player average",
+    name="All-player average (all injuries)",
     line=dict(color="gray", dash="dash", width=2),
 ))
 
@@ -101,7 +133,7 @@ fig.add_vline(x=0, line_dash="dot", line_color="gray", opacity=0.6)
 fig.add_annotation(x=0, y=1, yref="paper", text="Return", showarrow=False, yshift=10)
 
 fig.update_layout(
-    title=f"{selected_player} — {selected_stat_label} Per Game (5-Game Rolling Average)",
+    title=f"{selected_player} ({player_injury_type}) — {selected_stat_label} Per Game (5-Game Rolling Average)",
     xaxis_title="Games From Return (negative = before injury)",
     yaxis_title=selected_stat_label,
 )

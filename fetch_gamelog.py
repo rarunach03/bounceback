@@ -1,4 +1,7 @@
+import time
+
 import pandas as pd
+import requests
 from nba_api.stats.static import players
 from nba_api.stats.endpoints import playergamelog
 
@@ -17,7 +20,21 @@ def get_player_gamelog(player_name, season):
 
     # This is a *live* API call — it goes over the internet to NBA.com's
     # stats servers and asks for every game this player played that season.
-    gamelog = playergamelog.PlayerGameLog(player_id=player_id, season=season)
+    #
+    # stats.nba.com is slow and flaky, and with a lot of players a single
+    # timed-out request would otherwise crash the whole run. So we give each
+    # call a longer timeout (60s instead of the default 30) and retry up to
+    # 3 times, waiting a little longer between each attempt.
+    for attempt in range(3):
+        try:
+            gamelog = playergamelog.PlayerGameLog(
+                player_id=player_id, season=season, timeout=60
+            )
+            break
+        except requests.exceptions.RequestException:
+            if attempt == 2:
+                raise
+            time.sleep(2 * (attempt + 1))
 
     # The result comes back bundled as one or more pandas DataFrames (think:
     # spreadsheet-like tables). get_data_frames() returns a list of them,

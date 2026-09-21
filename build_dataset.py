@@ -1,3 +1,6 @@
+import os
+import time
+
 import pandas as pd
 
 from injury_split import get_before_after_gamelog
@@ -24,6 +27,10 @@ def build_all_players_dataset(csv_path="injuries.csv"):
     for _, row in injuries_df.iterrows():
         print(f"Fetching {row['player_name']}...")
 
+        # A short pause between players: firing dozens of requests back to
+        # back is what got us throttled by stats.nba.com in the first place.
+        time.sleep(1.5)
+
         player_df = get_before_after_gamelog(
             player_name=row["player_name"],
             before_season=row["before_season"],
@@ -36,10 +43,51 @@ def build_all_players_dataset(csv_path="injuries.csv"):
         # whose game is whose.
         player_df["PLAYER"] = row["player_name"]
 
+        # The same idea for organizing by season and team: tag every row
+        # with the season the injury happened in (straight from the CSV) and
+        # the team the player was on when it happened. MATCHUP looks like
+        # "GSW vs. TOR" or "GSW @ TOR" — the player's own team is always the
+        # first word, so .split(" ")[0] pulls it out. We read it from the
+        # last "Before" game (.iloc[-1]) because that's the closest game to
+        # the injury, and players can change teams between seasons.
+        before_games = player_df[player_df["PERIOD"] == "Before"]
+        player_df["TEAM"] = before_games["MATCHUP"].iloc[-1].split(" ")[0]
+        player_df["INJURY_SEASON"] = row["before_season"]
+
+        # And the same again for what kind of injury it was, straight from
+        # the CSV, so the app can filter by injury type.
+        player_df["INJURY_TYPE"] = row["injury_type"]
+
         all_players_dfs.append(player_df)
 
     # Stack every player's table into one big combined dataset.
     return pd.concat(all_players_dfs, ignore_index=True)
+
+
+def read_cached_dataset(cache_path="all_players_cache.csv"):
+    """Read the saved dataset from disk, or return None if it hasn't been
+    built yet. This never touches the network, so the app can call it on
+    every load without ever hanging."""
+
+    if not os.path.exists(cache_path):
+        return None
+
+    # parse_dates turns these two columns back into real dates when
+    # reading — a CSV only stores plain text, so without it they'd come
+    # back as strings.
+    return pd.read_csv(cache_path, parse_dates=["GAME_DATE", "INJURY_DATE"])
+
+
+def save_dataset(csv_path="injuries.csv", cache_path="all_players_cache.csv"):
+    """Fetch everything from the NBA API and save it to the cache file.
+    This is the slow, network-dependent step, so it runs on its own from
+    the command line (python build_dataset.py) instead of inside the app —
+    the data for past seasons never changes, so you only need to re-run it
+    when you add players to injuries.csv."""
+
+    all_data_df = build_all_players_dataset(csv_path)
+    all_data_df.to_csv(cache_path, index=False)
+    return all_data_df
 
 
 def compute_benchmark_curve(all_data_df, stat_column="PTS_ROLLING_AVG"):
@@ -69,6 +117,7 @@ def compute_benchmark_curve(all_data_df, stat_column="PTS_ROLLING_AVG"):
 
 
 if __name__ == "__main__":
-    all_data_df = build_all_players_dataset()
-    print(f"\nTotal games across all players: {len(all_data_df)}")
+    all_data_df = save_dataset()
+    print(f"\nSaved to all_players_cache.csv")
+    print(f"Total games across all players: {len(all_data_df)}")
     print(all_data_df.groupby("PLAYER").size())
