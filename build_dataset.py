@@ -90,11 +90,13 @@ def save_dataset(csv_path="injuries.csv", cache_path="all_players_cache.csv"):
     return all_data_df
 
 
-def compute_benchmark_curve(all_data_df, stat_column="PTS_ROLLING_AVG"):
+def compute_benchmark_curve(all_data_df, stat_column="PTS_ROLLING_AVG", min_players=5):
     """Average every player's smoothed stat at each GAMES_FROM_RETURN value,
     producing one 'typical recovery' line across the whole dataset. Defaults
     to points, but stat_column can be any of the "<STAT>_ROLLING_AVG"
-    columns injury_split.py computes (e.g. "REB_ROLLING_AVG")."""
+    columns injury_split.py computes (e.g. "REB_ROLLING_AVG"). Points where
+    fewer than min_players players have a game are left out, since an
+    "average" of one or two players isn't really a typical anything."""
 
     # groupby() with a LIST of two columns groups rows by every unique
     # combination of the two — here, every (PERIOD, GAMES_FROM_RETURN) pair.
@@ -103,16 +105,30 @@ def compute_benchmark_curve(all_data_df, stat_column="PTS_ROLLING_AVG"):
     # Taking .mean() of stat_column within each group gives the average
     # "how well players were typically doing" at that exact point in their
     # recovery timeline, across everyone in the dataset.
+    #
+    # .agg() lets us compute more than one thing per group at once. Besides
+    # the average, we also count how many *different* players have a game
+    # at that point (.nunique() counts distinct values, so a player is
+    # counted once no matter how many rows they have there). Players have
+    # different numbers of games, so far from the return only the players
+    # with the longest stretches are left — sometimes just one.
     benchmark_df = (
-        all_data_df.groupby(["PERIOD", "GAMES_FROM_RETURN"])[stat_column]
-        .mean()
+        all_data_df.groupby(["PERIOD", "GAMES_FROM_RETURN"])
+        .agg(**{stat_column: (stat_column, "mean"), "N_PLAYERS": ("PLAYER", "nunique")})
         .reset_index()
     )
 
-    # groupby().mean() leaves PERIOD and GAMES_FROM_RETURN as a special
-    # kind of row-label (called an index) instead of regular columns.
-    # .reset_index() turns them back into normal columns, which is the
-    # shape plotly expects to plot from.
+    # Keep only the points backed by enough players, then drop the count
+    # column since the app only needs the x and y values to draw the line.
+    # Each player's games run in one unbroken stretch, so this trims from
+    # the outer ends inward and never leaves a gap in the middle.
+    benchmark_df = benchmark_df[benchmark_df["N_PLAYERS"] >= min_players].drop(
+        columns="N_PLAYERS"
+    )
+
+    # (groupby leaves PERIOD and GAMES_FROM_RETURN as a special kind of
+    # row-label called an index; the .reset_index() above turned them back
+    # into normal columns, which is the shape plotly expects to plot from.)
     #
     # groupby() also sorts its groups alphabetically by PERIOD, so "After"
     # would come before "Before" — and since the app draws this as one
